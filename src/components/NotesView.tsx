@@ -392,6 +392,89 @@ export const NotesView: React.FC<NotesViewProps> = ({ data, results }) => {
                   </table>
                 </div>
               </div>
+
+              {/* Factory Overhead Breakdown Schedule */}
+              {((data.indirectLabor && data.indirectLabor.length > 0) ||
+                (data.indirectMaterials && data.indirectMaterials.length > 0) ||
+                (data.indirectUtilities && data.indirectUtilities.length > 0) ||
+                capex.length > 0) && (
+                <div className="pt-2">
+                  <h4 className="font-bold text-slate-900 mb-2 font-sans">
+                    Factory Overhead & Manufacturing Support Formulation (Year 1):
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="p-3 bg-blue-50/60 rounded-xl border border-blue-200">
+                      <div className="text-[11px] font-bold text-blue-900">1. Indirect Labor</div>
+                      <div className="text-base font-extrabold text-blue-950 font-mono mt-0.5">
+                        {formatCurrency(
+                          (data.indirectLabor || []).reduce((sum, l) => {
+                            if (l.classification === 'fixed') {
+                              return sum + (l.dailyRate || 0) * (l.workingDaysPerMonth || 26) * 12 * (l.numberOfEmployees || 0);
+                            }
+                            return sum + (l.ratePerPiece || 0) * products.reduce((s, p) => s + p.initialAnnualVolume, 0);
+                          }, 0),
+                          symbol,
+                          0
+                        )}
+                      </div>
+                      <div className="text-[10px] text-blue-700 mt-1">{(data.indirectLabor || []).length} supervisory/QA roles</div>
+                    </div>
+
+                    <div className="p-3 bg-purple-50/60 rounded-xl border border-purple-200">
+                      <div className="text-[11px] font-bold text-purple-900">2. Indirect Materials</div>
+                      <div className="text-base font-extrabold text-purple-950 font-mono mt-0.5">
+                        {formatCurrency(
+                          (data.indirectMaterials || []).reduce((sum, m) => {
+                            if (typeof m.annualCost === 'number' && m.annualCost > 0) return sum + m.annualCost;
+                            return sum + (m.costPerMaterialUnit || 0) * (m.annualQuantity || 0);
+                          }, 0),
+                          symbol,
+                          0
+                        )}
+                      </div>
+                      <div className="text-[10px] text-purple-700 mt-1">{(data.indirectMaterials || []).length} factory consumables</div>
+                    </div>
+
+                    <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200">
+                      <div className="text-[11px] font-bold text-amber-900">3. Indirect Utilities (Overhead)</div>
+                      <div className="text-base font-extrabold text-amber-950 font-mono mt-0.5">
+                        {formatCurrency(
+                          (data.indirectUtilities || []).reduce((sum, u) => {
+                            const cost = u.annualCost || (u.monthlyCost || 0) * 12;
+                            let pct = 100;
+                            if (u.allocationCategory === 'opex') pct = 0;
+                            else if (u.allocationCategory === 'percentage') pct = typeof u.overheadPercent === 'number' ? u.overheadPercent : 100;
+                            return sum + cost * (pct / 100);
+                          }, 0),
+                          symbol,
+                          0
+                        )}
+                      </div>
+                      <div className="text-[10px] text-amber-700 mt-1">{(data.indirectUtilities || []).length} utility accounts</div>
+                    </div>
+
+                    <div className="p-3 bg-indigo-50/60 rounded-xl border border-indigo-200">
+                      <div className="text-[11px] font-bold text-indigo-900">4. Fixed Asset Depreciation</div>
+                      <div className="text-base font-extrabold text-indigo-950 font-mono mt-0.5">
+                        {formatCurrency(
+                          capex.reduce((sum, a) => {
+                            if (a.purchaseYear > 1) return sum;
+                            const base = Math.max(0, a.acquisitionCost - (a.salvageValue || 0));
+                            const depr = a.usefulLifeYears > 0 ? base / a.usefulLifeYears : 0;
+                            let pct = 100;
+                            if (a.overheadAllocationCategory === 'operating') pct = 0;
+                            else if (a.overheadAllocationCategory === 'percentage') pct = typeof a.overheadPercent === 'number' ? a.overheadPercent : 100;
+                            return sum + depr * (pct / 100);
+                          }, 0),
+                          symbol,
+                          0
+                        )}
+                      </div>
+                      <div className="text-[10px] text-indigo-700 mt-1">{capex.length} capitalized assets</div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

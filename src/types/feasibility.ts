@@ -44,6 +44,8 @@ export type CapexCategory =
   | 'IT Hardware & Software'
   | 'Land & Buildings';
 
+export type FixedAssetOverheadCategory = 'overhead' | 'operating' | 'percentage';
+
 export interface CapexItem {
   id: string;
   name: string;
@@ -52,6 +54,8 @@ export interface CapexItem {
   usefulLifeYears: number;
   salvageValue: number;
   purchaseYear: number; // 0 for initial startup, 1-5 for future expansion
+  overheadAllocationCategory?: FixedAssetOverheadCategory;
+  overheadPercent?: number; // % allocated to Factory Overhead (0 - 100)
 }
 
 export interface CompanyPolicies {
@@ -89,10 +93,45 @@ export interface CompanyProfile {
 
 export interface FinancingPlan {
   initialEquity: number; // Contributed capital
+  hasLoan?: boolean; // Whether bank borrowing is enabled
+  bankName?: string; // Commercial bank selected (e.g. BDO Unibank, BPI, Metrobank, etc.)
   loanPrincipal: number; // Long-term bank borrowing
   loanInterestRate: number; // Annual interest rate % (e.g. 7.5%)
   loanTermYears: number; // Loan tenor in years (e.g. 5)
   gracePeriodYears: number; // Years before principal repayment starts
+}
+
+export interface PreOperatingExpenseItem {
+  id: string;
+  name: string; // Expense description (e.g. SEC/DTI Registration, Mayor's Permit, Legal Fees, Feasibility Study, Initial Marketing)
+  category?: string; // 'Legal & Regulatory', 'Professional & Advisory', 'Marketing & Launch', 'Training & Trial', 'Utilities & Deposits', 'Other'
+  amount: number; // Amount paid
+  notes?: string; // Notes or official receipt reference
+}
+
+export interface CashOnHandItem {
+  id: string;
+  description: string; // Purpose e.g. Petty Cash Fund, Cash Register Drawer, Vault Cash, Delivery Float
+  custodianOrLocation?: string; // Custodian / Department / Branch
+  amount: number; // Cash on hand allocation amount
+  notes?: string; // Replenishment policy / remarks
+}
+
+export type BankDepositAccountType =
+  | 'Savings Account'
+  | 'High-Yield Savings'
+  | 'Time Deposit'
+  | 'Checking / Current Account'
+  | 'Special Deposit Account';
+
+export interface CashInBankItem {
+  id: string;
+  bankName: string; // Bank institution name (e.g. BDO, BPI, Metrobank, LandBank, Security Bank, etc.)
+  accountType: BankDepositAccountType;
+  accountNumberOrRef?: string; // Account reference or purpose identifier
+  depositAmount: number; // Amount placed in bank
+  annualInterestRate: number; // Annual interest rate earned % p.a.
+  notes?: string; // Purpose, maturity tenor, or notes
 }
 
 export interface GeneralAssumptions {
@@ -140,6 +179,37 @@ export interface FactoryOverheadItem {
   annualCost: number; // Annual overhead expense
 }
 
+export interface IndirectLaborItem {
+  id: string;
+  roleName: string; // Role / Employee title (e.g. Factory Supervisor, Maintenance Tech, QA Inspector)
+  productId: string; // Specific product ID or 'all' for general factory production
+  numberOfEmployees: number; // Headcount
+  classification: LaborClassification; // 'fixed' | 'quota'
+  dailyRate: number; // Daily rate (for fixed)
+  workingDaysPerMonth: number; // Working days per month (default 26)
+  ratePerPiece: number; // Pay per piece produced (for quota)
+}
+
+export interface IndirectMaterialItem {
+  id: string;
+  materialName: string; // Material description (e.g. Machine Lubricants, Cleaning Sanitizers, Safety Gloves)
+  costPerMaterialUnit: number; // Cost per unit of measure
+  unitOfMeasure?: string; // Unit of measure (e.g. liters, kg, boxes, pcs)
+  annualQuantity: number; // Estimated annual consumption
+  annualCost?: number; // Total annual cost (optional override or computed)
+}
+
+export type UtilityAllocationCategory = 'overhead' | 'opex' | 'percentage';
+
+export interface IndirectUtilityItem {
+  id: string;
+  expenseAccount: string; // Expense account (e.g. Factory Electricity, Water & Sewerage, Gas, Facility Internet)
+  monthlyCost: number; // Monthly cost
+  annualCost: number; // Annual cost (monthlyCost * 12)
+  allocationCategory: UtilityAllocationCategory; // 'overhead' (100%), 'opex' (100%), or 'percentage'
+  overheadPercent: number; // % belonging to Factory Overhead (0 to 100)
+}
+
 export interface FeasibilityModelData {
   companyProfile?: CompanyProfile;
   general: GeneralAssumptions;
@@ -148,6 +218,12 @@ export interface FeasibilityModelData {
   rawMaterials?: RawMaterialItem[];
   directLabor?: DirectLaborItem[];
   factoryOverhead?: FactoryOverheadItem[];
+  indirectLabor?: IndirectLaborItem[];
+  indirectMaterials?: IndirectMaterialItem[];
+  indirectUtilities?: IndirectUtilityItem[];
+  preOperatingExpenses?: PreOperatingExpenseItem[];
+  cashOnHand?: CashOnHandItem[];
+  cashInBank?: CashInBankItem[];
   opex: OpexItem[];
   capex: CapexItem[];
   financing: FinancingPlan;
@@ -173,9 +249,13 @@ export interface YearlyIncomeStatement {
   ebitda: number;
   ebitdaMarginPercent: number;
   depreciation: number;
+  factoryDepreciation?: number;
+  operatingDepreciation?: number;
+  totalDepreciation?: number;
   operatingIncome: number; // EBIT
   operatingMarginPercent: number;
-  interestExpense: number;
+  interestIncome?: number; // Interest earned on bank deposits & placements
+  interestExpense: number; // Interest paid on bank borrowings
   earningsBeforeTax: number; // EBT
   taxExpense: number;
   netIncome: number;
@@ -187,6 +267,8 @@ export interface YearlyBalanceSheet {
   assets: {
     currentAssets: {
       cash: number;
+      cashOnHand?: number;
+      cashInBank?: number;
       accountsReceivable: number;
       inventory: number;
       totalCurrentAssets: number;
@@ -195,6 +277,7 @@ export interface YearlyBalanceSheet {
       grossPpe: number;
       accumulatedDepreciation: number;
       netPpe: number;
+      deferredPreOperatingCosts?: number;
       totalNonCurrentAssets: number;
     };
     totalAssets: number;

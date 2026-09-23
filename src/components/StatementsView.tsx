@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { FeasibilityModelData, ProjectedResults } from '../types/feasibility';
 import { formatCurrency, formatPercent } from '../utils/financialCalculations';
+import { LoanAmortizationModal } from './LoanAmortizationModal';
 import {
   FileSpreadsheet,
   Download,
@@ -11,6 +12,7 @@ import {
   ChevronRight,
   TrendingUp,
   Percent,
+  Scale,
 } from 'lucide-react';
 
 interface StatementsViewProps {
@@ -28,6 +30,7 @@ export const StatementsView: React.FC<StatementsViewProps> = ({ data, results })
   const [copied, setCopied] = useState(false);
   const [expandedOpex, setExpandedOpex] = useState(false);
   const [expandedCogs, setExpandedCogs] = useState(true);
+  const [isAmortizationModalOpen, setIsAmortizationModalOpen] = useState(false);
 
   const years = incomeStatements.map((is) => is.year);
 
@@ -151,10 +154,20 @@ export const StatementsView: React.FC<StatementsViewProps> = ({ data, results })
             </button>
           )}
 
+          {/* Amortization & Interest Comparison Modal Button */}
+          <button
+            onClick={() => setIsAmortizationModalOpen(true)}
+            className="px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+            title="View Loan Amortization Schedule, Interest Received Table, and Paid vs. Received Comparison"
+          >
+            <Scale className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Amortization & Interest Comparison</span>
+          </button>
+
           {/* Copy Table Button */}
           <button
             onClick={handleCopyTable}
-            className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1.5 transition-colors shadow-2xs"
+            className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
             title="Copy table to paste into Excel/Spreadsheet"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-500" />}
@@ -349,6 +362,18 @@ export const StatementsView: React.FC<StatementsViewProps> = ({ data, results })
                   ))}
                 </tr>
 
+                {/* Bank Interest Income */}
+                {incomeStatements.some((is) => (is.interestIncome || 0) > 0) && (
+                  <tr>
+                    <td className="py-2 px-4 font-sans text-emerald-700 font-medium">Add: Interest Income from Bank Deposits</td>
+                    {incomeStatements.map((is) => (
+                      <td key={is.year} className="py-2 px-4 text-right text-emerald-700 font-mono">
+                        +{formatCurrency(is.interestIncome || 0, symbol, 0)}
+                      </td>
+                    ))}
+                  </tr>
+                )}
+
                 {/* Earnings Before Tax */}
                 <tr className="text-slate-800">
                   <td className="py-2 px-4 font-sans font-semibold">Earnings Before Tax (EBT)</td>
@@ -413,13 +438,39 @@ export const StatementsView: React.FC<StatementsViewProps> = ({ data, results })
                   </td>
                 </tr>
                 <tr>
-                  <td className="py-1.5 px-8 font-sans text-slate-600">Cash and Cash Equivalents</td>
+                  <td className="py-1.5 px-8 font-sans text-slate-700 font-medium">Cash and Cash Equivalents</td>
                   {balanceSheets.map((b) => (
-                    <td key={b.year} className="py-1.5 px-4 text-right text-slate-800">
+                    <td key={b.year} className="py-1.5 px-4 text-right text-slate-800 font-semibold">
                       {formatCurrency(b.assets.currentAssets.cash, symbol, 0)}
                     </td>
                   ))}
                 </tr>
+                {/* Cash on Hand breakdown */}
+                {(data.cashOnHand?.length || 0) > 0 && (
+                  <tr className="text-slate-500 text-[11px]">
+                    <td className="py-1 px-12 font-sans italic text-emerald-700">↳ of which: Physical Cash on Hand</td>
+                    {balanceSheets.map((b) => (
+                      <td key={b.year} className="py-1 px-4 text-right text-slate-500">
+                        {b.year === 0
+                          ? formatCurrency(b.assets.currentAssets.cashOnHand || 0, symbol, 0)
+                          : '—'}
+                      </td>
+                    ))}
+                  </tr>
+                )}
+                {/* Cash in Bank breakdown */}
+                {(data.cashInBank?.length || 0) > 0 && (
+                  <tr className="text-slate-500 text-[11px]">
+                    <td className="py-1 px-12 font-sans italic text-blue-700">↳ of which: Cash in Bank Placements</td>
+                    {balanceSheets.map((b) => (
+                      <td key={b.year} className="py-1 px-4 text-right text-slate-500">
+                        {b.year === 0
+                          ? formatCurrency(b.assets.currentAssets.cashInBank || 0, symbol, 0)
+                          : '—'}
+                      </td>
+                    ))}
+                  </tr>
+                )}
                 <tr>
                   <td className="py-1.5 px-8 font-sans text-slate-600">Trade Accounts Receivable (Net)</td>
                   {balanceSheets.map((b) => (
@@ -816,6 +867,15 @@ export const StatementsView: React.FC<StatementsViewProps> = ({ data, results })
           )}
         </div>
       </div>
+
+      {/* Loan Amortization & Interest Comparison Modal */}
+      {isAmortizationModalOpen && (
+        <LoanAmortizationModal
+          isOpen={isAmortizationModalOpen}
+          onClose={() => setIsAmortizationModalOpen(false)}
+          data={data}
+        />
+      )}
     </div>
   );
 };

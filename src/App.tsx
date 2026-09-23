@@ -42,7 +42,7 @@ export function App() {
         },
         financing: {
           ...prev.financing,
-          initialEquity: totalEquity > 0 ? totalEquity : prev.financing.initialEquity,
+          initialEquity: totalEquity,
         },
       };
       return updated;

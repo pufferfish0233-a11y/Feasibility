@@ -8,7 +8,155 @@ import {
   DebtScheduleRow,
   CapitalBudgetingMetrics,
   OpexCategory,
+  ProductItem,
+  RawMaterialItem,
+  DirectLaborItem,
+  FactoryOverheadItem,
+  IndirectLaborItem,
+  IndirectMaterialItem,
+  IndirectUtilityItem,
+  CapexItem,
 } from '../types/feasibility';
+
+/**
+ * Computes direct material, direct labor, and factory overhead per unit for each product
+ * based on raw materials yield, direct labor allocations, and the 4 factory overhead components:
+ * 1. Indirect Labor
+ * 2. Indirect Materials
+ * 3. Indirect Utilities (Overhead share)
+ * 4. Fixed Assets (CAPEX Depreciation Overhead share)
+ * + Any legacy overhead items
+ */
+export function computeProductUnitCosts(
+  currentProducts: ProductItem[],
+  currentRawMaterials: RawMaterialItem[] = [],
+  currentDirectLabor: DirectLaborItem[] = [],
+  currentFactoryOverhead: FactoryOverheadItem[] = [],
+  currentIndirectLabor: IndirectLaborItem[] = [],
+  currentIndirectMaterials: IndirectMaterialItem[] = [],
+  currentIndirectUtilities: IndirectUtilityItem[] = [],
+  currentCapex: CapexItem[] = []
+): ProductItem[] {
+  const totalProductionVolume = currentProducts.reduce(
+    (sum, p) => sum + (p.initialAnnualVolume || 0),
+    0
+  );
+
+  // 1. Indirect Labor Annual Total
+  const totalIndirectLaborCost = currentIndirectLabor.reduce((sum, l) => {
+    if (l.classification === 'fixed') {
+      const days = l.workingDaysPerMonth || 26;
+      return sum + (l.dailyRate || 0) * days * 12 * (l.numberOfEmployees || 0);
+    } else {
+      const prod = currentProducts.find((p) => p.id === l.productId);
+      const vol = prod ? prod.initialAnnualVolume : totalProductionVolume;
+      return sum + (l.ratePerPiece || 0) * vol;
+    }
+  }, 0);
+
+  // 2. Indirect Materials Annual Total (One consolidated table for all indirect materials)
+  const totalIndirectMaterialsCost = currentIndirectMaterials.reduce((sum, m) => {
+    if (typeof m.annualCost === 'number' && m.annualCost > 0) {
+      return sum + m.annualCost;
+    }
+    return sum + (m.costPerMaterialUnit || 0) * (m.annualQuantity || 0);
+  }, 0);
+
+  // 3. Indirect Utilities Annual Total (Overhead portion)
+  const totalIndirectUtilitiesOverhead = currentIndirectUtilities.reduce((sum, u) => {
+    let overheadPct = 100;
+    if (u.allocationCategory === 'opex') {
+      overheadPct = 0;
+    } else if (u.allocationCategory === 'percentage') {
+      overheadPct = typeof u.overheadPercent === 'number' ? u.overheadPercent : 100;
+    }
+    return sum + (u.annualCost || 0) * (overheadPct / 100);
+  }, 0);
+
+  // 4. Fixed Assets Depreciation (Overhead portion for Year 1)
+  const totalFixedAssetsOverheadDepreciation = currentCapex.reduce((sum, asset) => {
+    if (asset.purchaseYear > 1) return sum;
+    const deprBase = Math.max(0, asset.acquisitionCost - (asset.salvageValue || 0));
+    const annualDepr = asset.usefulLifeYears > 0 ? deprBase / asset.usefulLifeYears : 0;
+    let overheadPct = 100;
+    if (asset.overheadAllocationCategory === 'operating') {
+      overheadPct = 0;
+    } else if (asset.overheadAllocationCategory === 'percentage') {
+      overheadPct = typeof asset.overheadPercent === 'number' ? asset.overheadPercent : 100;
+    }
+    return sum + annualDepr * (overheadPct / 100);
+  }, 0);
+
+  // 5. Legacy Factory Overhead items (if any exist)
+  const generalLegacyOverhead = currentFactoryOverhead
+    .filter((o) => o.productId === 'all' || !o.productId)
+    .reduce((sum, o) => sum + (o.annualCost || 0), 0);
+
+  const totalGeneralOverhead =
+    totalIndirectLaborCost +
+    totalIndirectMaterialsCost +
+    totalIndirectUtilitiesOverhead +
+    totalFixedAssetsOverheadDepreciation +
+    generalLegacyOverhead;
+
+  const generalOverheadPerUnit =
+    totalProductionVolume > 0 ? totalGeneralOverhead / totalProductionVolume : 0;
+
+  return currentProducts.map((prod) => {
+    // Direct Materials
+    const prodMaterials = currentRawMaterials.filter((m) => m.productId === prod.id);
+    let directMaterialPerUnit = prod.directMaterialPerUnit;
+    if (prodMaterials.length > 0) {
+      directMaterialPerUnit = prodMaterials.reduce((sum, m) => {
+        if (m.yieldPerMaterialUnit > 0) {
+          return sum + ((m.costPerMaterialUnit || 0) / m.yieldPerMaterialUnit);
+        }
+        return sum;
+      }, 0);
+    }
+
+    // Direct Labor
+    const prodLabor = currentDirectLabor.filter(
+      (l) => l.productId === prod.id || l.productId === 'all' || !l.productId
+    );
+    let directLaborPerUnit = prod.directLaborPerUnit;
+    if (prodLabor.length > 0) {
+      const quotaUnitCost = prodLabor
+        .filter((l) => l.classification === 'quota' && (l.productId === prod.id || l.productId === 'all'))
+        .reduce((sum, l) => sum + (l.ratePerPiece || 0), 0);
+
+      const fixedUnitCost = prodLabor
+        .filter((l) => l.classification === 'fixed')
+        .reduce((sum, l) => {
+          const days = l.workingDaysPerMonth || 26;
+          const monthlySalary = (l.dailyRate || 0) * days;
+          const annualSalary = monthlySalary * 12;
+          const totalRoleCost = annualSalary * (l.numberOfEmployees || 0);
+          if (l.productId === prod.id) {
+            return sum + (prod.initialAnnualVolume > 0 ? totalRoleCost / prod.initialAnnualVolume : 0);
+          } else {
+            return sum + (totalProductionVolume > 0 ? totalRoleCost / totalProductionVolume : 0);
+          }
+        }, 0);
+
+      directLaborPerUnit = quotaUnitCost + fixedUnitCost;
+    }
+
+    // Specific product legacy overhead (if any)
+    const specificProdOverhead = currentFactoryOverhead
+      .filter((o) => o.productId === prod.id)
+      .reduce((sum, o) => sum + (prod.initialAnnualVolume > 0 ? (o.annualCost || 0) / prod.initialAnnualVolume : 0), 0);
+
+    const overheadCostPerUnit = generalOverheadPerUnit + specificProdOverhead;
+
+    return {
+      ...prod,
+      directMaterialPerUnit: Number(directMaterialPerUnit.toFixed(4)),
+      directLaborPerUnit: Number(directLaborPerUnit.toFixed(4)),
+      overheadCostPerUnit: Number(overheadCostPerUnit.toFixed(4)),
+    };
+  });
+}
 
 /**
  * Solves for Internal Rate of Return (IRR) using bisection / secant numerical method
@@ -155,17 +303,27 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
   const discountRate = (general.discountRate || 12) / 100;
 
   // 1. Debt Amortization Schedule
+  const effectivePrincipal = financing.hasLoan === false ? 0 : (financing.loanPrincipal || 0);
   const debtSchedule = calculateDebtSchedule(
-    financing.loanPrincipal,
+    effectivePrincipal,
     financing.loanInterestRate,
     financing.loanTermYears,
     financing.gracePeriodYears,
     numYears
   );
 
+  // Pre-operating expenses amortized over projection horizon
+  const totalPreOpsExpenses = (data.preOperatingExpenses || []).reduce(
+    (sum, item) => sum + (item.amount || 0),
+    0
+  );
+  const annualPreOpsAmortization = totalPreOpsExpenses > 0 ? totalPreOpsExpenses / numYears : 0;
+
   // 2. Asset Depreciation Calculation (Straight Line)
   // For each year t, calculate total depreciation from active assets
   const yearlyDepreciation: number[] = new Array(numYears + 1).fill(0);
+  const yearlyFactoryDepreciation: number[] = new Array(numYears + 1).fill(0);
+  const yearlyOperatingDepreciation: number[] = new Array(numYears + 1).fill(0);
   const yearlyCapexAdditions: number[] = new Array(numYears + 1).fill(0);
 
   capex.forEach((asset) => {
@@ -175,14 +333,36 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
     const depreciableBase = Math.max(0, asset.acquisitionCost - (asset.salvageValue || 0));
     const annualDepr = asset.usefulLifeYears > 0 ? depreciableBase / asset.usefulLifeYears : 0;
 
+    let overheadPct = 100;
+    if (asset.overheadAllocationCategory === 'operating') {
+      overheadPct = 0;
+    } else if (asset.overheadAllocationCategory === 'percentage') {
+      overheadPct = typeof asset.overheadPercent === 'number' ? asset.overheadPercent : 100;
+    }
+    const factoryDepr = annualDepr * (overheadPct / 100);
+    const operatingDepr = annualDepr * ((100 - overheadPct) / 100);
+
     for (let y = Math.max(1, asset.purchaseYear === 0 ? 1 : asset.purchaseYear); y <= numYears; y++) {
       // Check if asset is still within useful life
       const assetAge = asset.purchaseYear === 0 ? y : y - asset.purchaseYear + 1;
       if (assetAge <= asset.usefulLifeYears) {
         yearlyDepreciation[y] += annualDepr;
+        yearlyFactoryDepreciation[y] += factoryDepr;
+        yearlyOperatingDepreciation[y] += operatingDepr;
       }
     }
   });
+
+  // Calculate base utility OPEX from indirect utilities allocated to Operating Expenses
+  const utilityOpexBase = (data.indirectUtilities || []).reduce((sum, u) => {
+    let opexPct = 0;
+    if (u.allocationCategory === 'opex') {
+      opexPct = 100;
+    } else if (u.allocationCategory === 'percentage') {
+      opexPct = 100 - (typeof u.overheadPercent === 'number' ? u.overheadPercent : 0);
+    }
+    return sum + (u.annualCost || 0) * (opexPct / 100);
+  }, 0);
 
   // 3. Projected Income Statement (Years 1 to 5)
   const incomeStatements: YearlyIncomeStatement[] = [];
@@ -242,15 +422,41 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
       totalOpex += cost;
     });
 
+    // Add indirect utility opex portion
+    if (utilityOpexBase > 0) {
+      const costInflation = Math.pow(1 + (general.generalInflationRate || 3) / 100, y - 1);
+      const utilityOpexForYear = utilityOpexBase * costInflation;
+      opexByCategory['Rent & Utilities'] = (opexByCategory['Rent & Utilities'] || 0) + utilityOpexForYear;
+      totalOpex += utilityOpexForYear;
+    }
+
+    // Amortization of pre-operating organization costs
+    if (annualPreOpsAmortization > 0) {
+      opexByCategory['Administrative & General'] =
+        (opexByCategory['Administrative & General'] || 0) + annualPreOpsAmortization;
+      totalOpex += annualPreOpsAmortization;
+    }
+
     const ebitda = grossProfit - totalOpex;
     const ebitdaMarginPercent = grossRevenue > 0 ? (ebitda / grossRevenue) * 100 : 0;
 
-    const depreciation = yearlyDepreciation[y];
+    const operatingDepr = yearlyOperatingDepreciation[y];
+    const factoryDepr = yearlyFactoryDepreciation[y];
+    const totalDepr = yearlyDepreciation[y];
+    const depreciation = operatingDepr;
     const operatingIncome = ebitda - depreciation; // EBIT
     const operatingMarginPercent = grossRevenue > 0 ? (operatingIncome / grossRevenue) * 100 : 0;
 
+    // Annual Interest Income earned from Cash in Bank deposits
+    const annualBankInterestIncome = (data.cashInBank || []).reduce((sum, item) => {
+      const deposit = item.depositAmount || 0;
+      const rate = (item.annualInterestRate || 0) / 100;
+      return sum + deposit * rate;
+    }, 0);
+    const interestIncome = annualBankInterestIncome;
+
     const interestExpense = debtSchedule[y - 1]?.interestPaid || 0;
-    const earningsBeforeTax = operatingIncome - interestExpense; // EBT
+    const earningsBeforeTax = operatingIncome + interestIncome - interestExpense; // EBT
 
     const taxExpense = earningsBeforeTax > 0 ? earningsBeforeTax * taxRate : 0;
     const netIncome = earningsBeforeTax - taxExpense;
@@ -275,8 +481,12 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
       ebitda,
       ebitdaMarginPercent,
       depreciation,
+      factoryDepreciation: factoryDepr,
+      operatingDepreciation: operatingDepr,
+      totalDepreciation: totalDepr,
       operatingIncome,
       operatingMarginPercent,
+      interestIncome,
       interestExpense,
       earningsBeforeTax,
       taxExpense,
@@ -289,14 +499,17 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
   // Year 0 Setup: Initial Balance Sheet
   const year0Capex = yearlyCapexAdditions[0];
   const initialEquity = financing.initialEquity || 0;
-  const initialDebt = financing.loanPrincipal || 0;
+  const initialDebt = effectivePrincipal;
   const initialTotalSources = initialEquity + initialDebt;
 
-  // Year 0 Cash is whatever remains after Year 0 Capex
-  const initialCash = Math.max(0, initialTotalSources - year0Capex);
+  // Year 0 Cash is whatever remains after Year 0 Capex and Pre-operating expenses paid
+  const initialCash = Math.max(0, initialTotalSources - year0Capex - totalPreOpsExpenses);
 
   const balanceSheets: YearlyBalanceSheet[] = [];
   const cashFlows: YearlyCashFlowStatement[] = [];
+
+  const totalCashOnHand = (data.cashOnHand || []).reduce((sum, item) => sum + (item.amount || 0), 0);
+  const totalCashInBank = (data.cashInBank || []).reduce((sum, item) => sum + (item.depositAmount || 0), 0);
 
   // Year 0 Balance Sheet
   balanceSheets.push({
@@ -304,6 +517,8 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
     assets: {
       currentAssets: {
         cash: initialCash,
+        cashOnHand: totalCashOnHand,
+        cashInBank: totalCashInBank,
         accountsReceivable: 0,
         inventory: 0,
         totalCurrentAssets: initialCash,
@@ -312,9 +527,10 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
         grossPpe: year0Capex,
         accumulatedDepreciation: 0,
         netPpe: year0Capex,
-        totalNonCurrentAssets: year0Capex,
+        deferredPreOperatingCosts: totalPreOpsExpenses,
+        totalNonCurrentAssets: year0Capex + totalPreOpsExpenses,
       },
-      totalAssets: initialCash + year0Capex,
+      totalAssets: initialCash + year0Capex + totalPreOpsExpenses,
     },
     liabilities: {
       currentLiabilities: {
@@ -354,7 +570,7 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
           : undefined,
     },
     totalLiabilitiesAndEquity: initialDebt + initialEquity,
-    balanceCheck: (initialCash + year0Capex) - (initialDebt + initialEquity),
+    balanceCheck: (initialCash + year0Capex + totalPreOpsExpenses) - (initialDebt + initialEquity),
   });
 
   let previousEndingCash = initialCash;
@@ -371,7 +587,7 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
     // Capex in year y
     const currentYearCapex = yearlyCapexAdditions[y] || 0;
     cumulativeGrossPpe += currentYearCapex;
-    cumulativeDepreciation += is.depreciation;
+    cumulativeDepreciation += yearlyDepreciation[y];
     const netPpe = cumulativeGrossPpe - cumulativeDepreciation;
 
     // Working Capital Balances based on policies:
@@ -392,7 +608,7 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
 
     // Cash from Operations
     const netCashFromOperations =
-      is.netIncome + is.depreciation - deltaAr - deltaInv + deltaAp;
+      is.netIncome + yearlyDepreciation[y] - deltaAr - deltaInv + deltaAp;
 
     // Cash from Investing
     const netCashFromInvesting = -currentYearCapex;
@@ -437,8 +653,9 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
     const longTermDebtEnding = Math.max(0, endingDebtTotal - currentPortion);
 
     // Balance Sheet Year y
+    const unamortizedPreOps = Math.max(0, totalPreOpsExpenses - annualPreOpsAmortization * y);
     const totalCurrentAssets = endingCash + arEnding + inventoryEnding;
-    const totalNonCurrentAssets = netPpe;
+    const totalNonCurrentAssets = netPpe + unamortizedPreOps;
     const totalAssets = totalCurrentAssets + totalNonCurrentAssets;
 
     const totalCurrentLiabilities = apEnding + currentPortion;
@@ -462,6 +679,7 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
           grossPpe: cumulativeGrossPpe,
           accumulatedDepreciation: cumulativeDepreciation,
           netPpe,
+          deferredPreOperatingCosts: unamortizedPreOps,
           totalNonCurrentAssets,
         },
         totalAssets,
@@ -511,7 +729,7 @@ export function runFeasibilityProjections(data: FeasibilityModelData): Projected
       year: y,
       operatingActivities: {
         netIncome: is.netIncome,
-        depreciationAddBack: is.depreciation,
+        depreciationAddBack: yearlyDepreciation[y],
         deltaAccountsReceivable: -deltaAr,
         deltaInventory: -deltaInv,
         deltaAccountsPayable: deltaAp,
