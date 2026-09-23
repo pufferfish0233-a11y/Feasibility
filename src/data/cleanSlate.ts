@@ -1,0 +1,51 @@
+import { FeasibilityModelData } from '../types/feasibility';
+
+export const CLEAN_SLATE_MODEL: FeasibilityModelData = {
+  companyProfile: {
+    entityName: '',
+    classification: 'Sole Proprietorship',
+    nature: '',
+    purpose: '',
+    soleProprietor: {
+      ownerName: '',
+      capital: 0,
+    },
+    partners: [],
+  },
+  general: {
+    projectName: '',
+    companyName: '',
+    industry: '',
+    preparedBy: '',
+    currency: 'USD',
+    currencySymbol: '$',
+    startYear: new Date().getFullYear(),
+    projectionYears: 5,
+    incomeTaxRate: 25,
+    discountRate: 12,
+    generalInflationRate: 3,
+    projectDescription: '',
+  },
+  policies: {
+    accountsReceivableDays: 30,
+    creditSalesPercent: 50,
+    inventoryHoldingDays: 30,
+    accountsPayableDays: 30,
+    minimumCashBalance: 0,
+    dividendPayoutRatio: 0,
+    depreciationMethod: 'straight_line',
+  },
+  products: [],
+  rawMaterials: [],
+  directLabor: [],
+  factoryOverhead: [],
+  opex: [],
+  capex: [],
+  financing: {
+    initialEquity: 0,
+    loanPrincipal: 0,
+    loanInterestRate: 0,
+    loanTermYears: 0,
+    gracePeriodYears: 0,
+  },
+};

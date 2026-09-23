@@ -1,0 +1,6 @@
+{
+  "name": "FinFeasibility Pro",
+  "description": "Comprehensive financial feasibility study modeler featuring projected financial statements, financial ratios, capital budgeting metrics (NPV, IRR, Payback), notes to financial statements, company policies, and executive dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
